@@ -49,20 +49,14 @@ class MicroMouse():
         min_distance = min(cell.distance for cell in neighbors)
         best_cells = [cell for cell in neighbors if cell.distance == min_distance]
         for cell in best_cells:
-            if(not cell.visited):
+            if(len(best_cells) !=0 and not cell.visited):
+                newCell = cell
+            else:
                 newCell = cell
         self.x = newCell.x
         self.y = newCell.y
         
-    def print_distances(self): #AI function
-        # Loop through rows (y) first so it prints row-by-row top to bottom
-        for y in range(cell_num_y):
-            row_str = ""
-            for x in range(cell_num_x):
-                dist = self.grid[x][y].distance
-                # Format with width of 3 characters for alignment
-                row_str += f"{dist:3} "
-            print(row_str)
+
 class Cell:
     def __init__(self,distance,x,y):
         self.x = x
