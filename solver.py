@@ -2,21 +2,63 @@
 #the robot should suite a maze constructed form 16*16 cell
 # each cell of width 16.8 cm and with walls of 5cm high
 
+#LIST OF THINGS I NEED
+#RECEIVE SPIN/M data or whatever and convert to velocity
+#Use a filter
+#Use a PID to find error between target cell and current position and find velocity needed (outer)
+#Use an inner PID to find error between velocity on wheels and veclotiy needed. (inner)
+#SOLVE DIFFERENTIAL EQUATION TO GET KP AND KD
+#ADD STEERING
 cell_num_x=16
 cell_num_y=16
 wall_sense_distance = 100 #mm assumes hull is 100x100mm
 sensors = []
 sensor_readings = []
 class MicroMouse():
-    def __init__(self,x,y,mass,velocity,acceleration,orientation):
+    def __init__(self,x,y,mass,velocity,lateral_velocity,acceleration,orientation):
         self.x=x
         self.y=y
         self.velocity=velocity
+        self.lateral_velocity = lateral_velocity
         self.acceleration=acceleration
         self.mass = mass 
         self.grid = [[Cell(999999,x,y) for y in range(cell_num_y)] for x in range(cell_num_x)]
         self.current_cell = self.grid[self.x][self.y]
         self.orientation = orientation
+    def updateVelocity(self):
+        #Using moving average filter
+        sample_window = 5
+        velocities = self.sampleVelocity(sample_window)
+        self.velocity = sum(velocities)/sample_window
+    def sampleVelocity(self,sample_window):
+        return [110,120,100] #PLACEHOLDER!!!!
+    def PID_pos(self,next_cell): #For straights
+        #Placeholder values
+        MAX_INTEGRAL = 2 
+        dt = 0.01
+        Kp_pos = 100 
+        Kd_pos = 10
+        Ki_pos = 1
+        Kp_steer = 100 
+        Kd_steer = 10
+        Ki_steer = 1
+        alpha = 0.3
+        steer_error =min(next_cell.x-self.x,next_cell.y-self.y)
+        pos_error = max(next_cell.x-self.x,next_cell.y-self.y)
+        self.updateVelocity()
+        steer_integral_error = 0
+        steer_integral_error += steer_error*dt
+        if (steer_integral_error > MAX_INTEGRAL): steer_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
+        if (steer_integral_error < -MAX_INTEGRAL): steer_integral_error = -MAX_INTEGRAL
+        pos_integral_error = 0
+        pos_integral_error += pos_error*dt
+        if (pos_integral_error > MAX_INTEGRAL): pos_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
+        if (pos_integral_error < -MAX_INTEGRAL): pos_integral_error = -MAX_INTEGRAL
+        velocity_throttle = Kp_pos*pos_error-Kd_pos*self.velocity + Ki_pos*pos_integral_error
+        velocity_steer = Kp_steer*steer_error-Kd_steer*self.lateral_velocity + Ki_steer*steer_integral_error
+        target_voltage = alpha*(velocity_throttle+velocity_steer) #placeholder equation
+    def PID_wheel_speed(self,next_cell):
+        pass
     def findNeighbors(self,cell):
             neighbors =[]
             directions = ["N","S","E","W"]
