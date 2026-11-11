@@ -15,7 +15,7 @@ wall_sense_distance = 100 #mm assumes hull is 100x100mm
 sensors = []
 sensor_readings = []
 class MicroMouse():
-    def __init__(self,x,y,mass,velocity,lateral_velocity,acceleration,orientation):
+    def __init__(self,x,y,mass,velocity,lateral_velocity,acceleration,orientation,motor_R,motor_L):
         self.x=x
         self.y=y
         self.velocity=velocity
@@ -25,6 +25,11 @@ class MicroMouse():
         self.grid = [[Cell(999999,x,y) for y in range(cell_num_y)] for x in range(cell_num_x)]
         self.current_cell = self.grid[self.x][self.y]
         self.orientation = orientation
+        self.pos_integral_error = 0
+        self.steer_integral_error = 0
+        self.motor_R = motor_R
+        self.motor_L = motor_L
+        self.velocity_integral_error = 0
     def updateVelocity(self):
         #Using moving average filter
         sample_window = 5
@@ -32,10 +37,26 @@ class MicroMouse():
         self.velocity = sum(velocities)/sample_window
     def sampleVelocity(self,sample_window):
         return [110,120,100] #PLACEHOLDER!!!!
-    def PID_pos(self,next_cell): #For straights
+    def getThrottleDirection(self,current,target): #Right and down is forward, left and up is backward
+        if(current<target):
+            return "F"
+        if(current>target):
+            return "B"
+    def getLateralDirection(self,current,target): #These must be ones stored on miromouse not the ones in the cells
+        if(self.orientation == "N" or self.orientation == "E"): #North and East directions
+            if(target<current):
+                return "L"
+            else:
+                return "R"
+        elif(self.orientation == "S" or self.orientation == "W"): #South and west directions
+            if(target<current):
+                return "R"
+            else:
+                return "L"
+    def PID_pos(self,next_cell,dt): #For straights
+        
         #Placeholder values
         MAX_INTEGRAL = 2 
-        dt = 0.01
         Kp_pos = 100 
         Kd_pos = 10
         Ki_pos = 1
@@ -43,22 +64,54 @@ class MicroMouse():
         Kd_steer = 10
         Ki_steer = 1
         alpha = 0.3
-        steer_error =min(next_cell.x-self.x,next_cell.y-self.y)
-        pos_error = max(next_cell.x-self.x,next_cell.y-self.y)
+        
+        x_diff = abs(next_cell.x-self.x)
+        y_diff = abs(next_cell.y-self.y)
+        steer_error =min(x_diff,y_diff)
+        pos_error = max(x_diff,y_diff)
+        self.steer_integral_error += steer_error*dt
+        if (self.steer_integral_error > MAX_INTEGRAL): self.steer_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
+        if (self.steer_integral_error < -MAX_INTEGRAL): self.steer_integral_error = -MAX_INTEGRAL
+        self.pos_integral_error += pos_error*dt
+        if (self.pos_integral_error > MAX_INTEGRAL): self.pos_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
+        if (self.pos_integral_error < -MAX_INTEGRAL): self.pos_integral_error = -MAX_INTEGRAL
         self.updateVelocity()
-        steer_integral_error = 0
-        steer_integral_error += steer_error*dt
-        if (steer_integral_error > MAX_INTEGRAL): steer_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
-        if (steer_integral_error < -MAX_INTEGRAL): steer_integral_error = -MAX_INTEGRAL
-        pos_integral_error = 0
-        pos_integral_error += pos_error*dt
-        if (pos_integral_error > MAX_INTEGRAL): pos_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
-        if (pos_integral_error < -MAX_INTEGRAL): pos_integral_error = -MAX_INTEGRAL
-        velocity_throttle = Kp_pos*pos_error-Kd_pos*self.velocity + Ki_pos*pos_integral_error
-        velocity_steer = Kp_steer*steer_error-Kd_steer*self.lateral_velocity + Ki_steer*steer_integral_error
-        target_voltage = alpha*(velocity_throttle+velocity_steer) #placeholder equation
-    def PID_wheel_speed(self,next_cell):
-        pass
+        velocity_throttle = Kp_pos*pos_error-Kd_pos*self.velocity + Ki_pos*self.pos_integral_error
+        velocity_steer = Kp_steer*steer_error-Kd_steer*self.lateral_velocity + Ki_steer*self.steer_integral_error
+        if x_diff < y_diff:
+            current = self.x
+            target = next_cell.x #problem with conversion vs micromouse position and cell
+        else:
+            current = self.y
+            target = next_cell.y
+        turn_direction = self.getLateralDirection(current,target)
+        if(turn_direction == "R"):
+            target_velocity_R = velocity_throttle-velocity_steer
+            target_velocity_L = velocity_throttle+velocity_steer 
+        else:
+            target_velocity_R = velocity_throttle+velocity_steer
+            target_velocity_L = velocity_throttle-velocity_steer
+        return (target_velocity_R,target_velocity_L)
+    def PID_wheel_speed(self,target_velocity,dt):
+        MAX_INTEGRAL = 2 
+        Kp_vel = 100 
+        Kd_vel = 10
+        Ki_vel = 1
+        Kv = 100 # Determined by motors KV rating and resistance
+        self.updateVelocity()
+        velocity_error = target_velocity-self.velocity
+        self.velocity_integral_error += velocity_error*dt
+        if (self.velocity_integral_error > MAX_INTEGRAL): self.velocity_integral_error = MAX_INTEGRAL #ANTI SUPER BUILD UP
+        if (self.velocity_integral_error < -MAX_INTEGRAL): self.velocity_integral_error = -MAX_INTEGRAL
+        pid_out = Kp_vel*velocity_error - Kd_vel*self.acceleration + Ki_vel*self.velocity_integral_error
+        voltage = Kv*target_velocity+ pid_out
+        MAX_PWM = 255
+        if voltage > MAX_PWM:
+            voltage = MAX_PWM
+        elif voltage < -MAX_PWM:
+            voltage = -MAX_PWM
+            
+        return int(voltage) # This integer goes directly to your motor driver PWM pin! idk what this means yet but ill figure it out
     def findNeighbors(self,cell):
             neighbors =[]
             directions = ["N","S","E","W"]
@@ -109,8 +162,7 @@ class MicroMouse():
     def move(self,target):
         direction = self.targetDirection(target)
         if(self.orientation!=direction):
-               self.turn(direction)
-        
+               self.turn(direction)       
     def targetDirection(self,target):
         directions = ["N","S","E","W"]
         if(self.current_cell.x == target.x):
